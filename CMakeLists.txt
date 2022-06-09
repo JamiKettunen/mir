@@ -193,7 +193,7 @@ enable_testing()
 find_package(PkgConfig)
 
 # Check for boost
-find_package(Boost 1.48.0 COMPONENTS date_time system program_options filesystem iostreams REQUIRED)
+find_package(Boost 1.74.0 COMPONENTS date_time system program_options filesystem iostreams REQUIRED)
 include_directories (SYSTEM
   ${Boost_INCLUDE_DIRS}
 )
