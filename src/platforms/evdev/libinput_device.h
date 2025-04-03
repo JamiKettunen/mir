@@ -31,6 +31,8 @@
 #include <vector>
 #include <map>
 
+#include <libinput.h> // libinput_event_touch*
+
 struct libinput_event;
 struct libinput_event_keyboard;
 struct libinput_event_touch;
@@ -73,9 +75,11 @@ private:
     EventUPtr convert_absolute_motion_event(libinput_event_pointer* pointer);
     EventUPtr convert_axis_event(libinput_event_pointer* pointer);
     EventUPtr convert_touch_frame(libinput_event_touch* touch);
+    EventUPtr convert_tablet_tool_axis(libinput_event_tablet_tool* tablet_tool);
     void handle_touch_down(libinput_event_touch* touch);
     void handle_touch_up(libinput_event_touch* touch);
     void handle_touch_motion(libinput_event_touch* touch);
+    void handle_tablet_tip(libinput_event_tablet_tool* tablet_tool);
     void update_device_info();
     bool is_output_active() const;
     OutputInfo get_output_info() const;
@@ -105,6 +109,7 @@ private:
     std::map<MirTouchId,ContactData> last_seen_properties;
 
     void update_contact_data(ContactData &data, MirTouchAction action, libinput_event_touch* touch);
+    void update_contact_data(ContactData & data, MirTouchAction action, libinput_event_tablet_tool* tablet_tool);
 };
 }
 }

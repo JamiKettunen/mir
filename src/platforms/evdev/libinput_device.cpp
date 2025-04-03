@@ -187,6 +187,18 @@ void mie::LibInputDevice::process_event(libinput_event* event)
                 }
             }
             break;
+        case LIBINPUT_EVENT_TABLET_TOOL_AXIS:
+            if (is_output_active())
+            {
+                if (auto input = convert_tablet_tool_axis(libinput_event_get_tablet_tool_event(event)))
+                {
+                    sink->handle_input(std::move(input));
+                }
+            }
+            break;
+        case LIBINPUT_EVENT_TABLET_TOOL_TIP:
+            handle_tablet_tip(libinput_event_get_tablet_tool_event(event));
+            break;
         default:
             break;
         }
@@ -425,6 +437,112 @@ void mie::LibInputDevice::handle_touch_motion(libinput_event_touch* touch)
     update_contact_data(last_seen_properties[id], mir_touch_action_change, touch);
 }
 
+// FIXME: dumb update_contact_data() touch version clone...
+void mie::LibInputDevice::update_contact_data(ContactData & data, MirTouchAction action, libinput_event_tablet_tool* tablet_tool)
+{
+    auto info = get_output_info();
+
+    uint32_t width = info.output_size.width.as_int();
+    uint32_t height = info.output_size.height.as_int();
+
+    data.action = action;
+    data.x = libinput_event_tablet_tool_get_x_transformed(tablet_tool, width);
+    data.y = libinput_event_tablet_tool_get_y_transformed(tablet_tool, height);
+    data.major = 8; // HACK: hardcoded value from libinput_device:libinput_event_touch_get_major_transformed()
+    data.minor = 6; // HACK: hardcoded value from libinput_device:libinput_event_touch_get_touch_minor_transformed()
+    data.pressure = libinput_event_tablet_tool_get_pressure(tablet_tool);
+    // FIXME: properly deal with tablet props like pressure/tilt etc instead of faking touch events...
+
+    info.transform_to_scene(data.x, data.y);
+}
+
+// FIXME: dumb handle_touch_down() & handle_touch_up() clone...
+void mie::LibInputDevice::handle_tablet_tip(libinput_event_tablet_tool* tablet_tool)
+{
+    MirTouchId const id = std::numeric_limits<std::int32_t>::max();
+
+    //Only update last_seen_properties[].action if there is a valid record in the map
+    //for this ID. Otherwise, an invalid "up" event from a bogus panel will
+    //create a fake action.
+    auto const it = last_seen_properties.find(id);
+    if (libinput_event_tablet_tool_get_tip_state(tablet_tool) == LIBINPUT_TABLET_TOOL_TIP_DOWN) {
+        if (it == end(last_seen_properties) || !it->second.down_notified)
+        {
+            update_contact_data(last_seen_properties[id], mir_touch_action_down, tablet_tool);
+        }
+        else
+        {
+            update_contact_data(it->second, mir_touch_action_change, tablet_tool);
+        }
+    } else { // up...
+        if (it != end(last_seen_properties))
+        {
+            if (it->second.down_notified)
+            {
+                it->second.action = mir_touch_action_up;
+            }
+            else
+            {
+                last_seen_properties.erase(it);
+            }
+        }
+    }
+}
+
+// FIXME: dumb convert_touch_frame() + handle_touch_motion() clone...
+mir::EventUPtr mie::LibInputDevice::convert_tablet_tool_axis(libinput_event_tablet_tool* tablet_tool)
+{
+    std::chrono::nanoseconds const time = std::chrono::microseconds(libinput_event_tablet_tool_get_time_usec(tablet_tool));
+    report->received_event_from_kernel(time.count(), EV_SYN, 0, 0);
+
+    auto const tool = mir_touch_tooltype_stylus;
+
+    std::vector<events::TouchContact> contacts;
+    for(auto it = begin(last_seen_properties); it != end(last_seen_properties);)
+    {
+        auto & id = it->first;
+        auto & data = it->second;
+
+        contacts.push_back(events::TouchContact{
+                           id,
+                           data.action,
+                           tool,
+                           {data.x, data.y},
+                           data.pressure,
+                           data.major,
+                           data.minor,
+                           data.orientation});
+
+        if (data.action == mir_touch_action_down)
+        {
+            data.action = mir_touch_action_change;
+            data.down_notified = true;
+        }
+
+        if (data.action == mir_touch_action_up)
+            it = last_seen_properties.erase(it);
+        else
+            ++it;
+    }
+
+    MirTouchId const id = std::numeric_limits<std::int32_t>::max();
+    update_contact_data(last_seen_properties[id], mir_touch_action_change, tablet_tool);
+
+    // Sanity check: Bogus panels are sending sometimes empty events that all point
+    // to (0, 0) coordinates. Detect those and drop the whole frame in this case.
+    // Also drop touch frames with no contacts inside
+    int emptyTouches = 0;
+    for (const auto &contact: contacts)
+    {
+        if (contact.position == geom::PointF{})
+            emptyTouches++;
+    }
+    if (contacts.empty() || emptyTouches > 1)
+        return {nullptr, [](auto){}};
+
+    return builder->touch_event(time, contacts);
+}
+
 mi::InputDeviceInfo mie::LibInputDevice::get_device_info()
 {
     return info;
@@ -445,6 +563,7 @@ void mie::LibInputDevice::update_device_info()
     auto const mappings = {
         Mapping{"ID_INPUT_MOUSE", mi::DeviceCapability::pointer},
         Mapping{"ID_INPUT_TOUCHSCREEN", mi::DeviceCapability::touchscreen},
+        Mapping{"ID_INPUT_TABLET", mi::DeviceCapability::touchscreen}, // HACK: FIXME properly handling pen input devices!
         Mapping{"ID_INPUT_TOUCHPAD", Caps(mi::DeviceCapability::touchpad) | mi::DeviceCapability::pointer},
         Mapping{"ID_INPUT_JOYSTICK", mi::DeviceCapability::joystick},
         Mapping{"ID_INPUT_KEY", mi::DeviceCapability::keyboard},
